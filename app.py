@@ -1,6 +1,7 @@
 from flask import Flask, Response, request
 from twilio.twiml.voice_response import VoiceResponse, Dial
 from twilio.twiml.messaging_response import MessagingResponse
+import os
 
 app = Flask(__name__)
 
@@ -14,7 +15,6 @@ TEAM_NUMBERS = [
 ]
 # ==================
 
-
 # ======================
 # INBOUND VOICE CALLS
 # ======================
@@ -25,7 +25,7 @@ def voice():
     dial = Dial(
         timeout=20,
         callerId=TWILIO_NUMBER,
-        action="/voicemail",   # Twilio calls this if Dial ends
+        action="/voicemail",   # Always goes to voicemail if Dial ends
         method="POST"
     )
 
@@ -33,6 +33,7 @@ def voice():
         dial.number(number)
 
     response.append(dial)
+
     return Response(str(response), mimetype="text/xml")
 
 
@@ -43,36 +44,34 @@ def voice():
 def voicemail():
     response = VoiceResponse()
 
+    # Always go to voicemail after Dial
     response.say(
         "If this is a medical emergency, please hang up and dial 911. "
         "You have reached Doctor Daliva's office. "
-        "Our office hours are Monday through Friday, 8 A M to 5 P M. "
-        "Please leave a detailed message with your name and callback number after the beep.",
+        "Our office hours are Monday through Friday, 8 AM to 5 PM. "
+        "Please leave a detailed message with your name and callback number.",
         voice="alice"
     )
 
     response.record(
-        max_length=120,
-        play_beep=True,
-        recording_status_callback="/recording-status",
-        recording_status_callback_method="POST"
+        maxLength=120,
+        playBeep=True,
+        action="/voicemail-complete",
+        method="POST"
     )
 
     response.say("Thank you. Goodbye.", voice="alice")
     response.hangup()
+
     return Response(str(response), mimetype="text/xml")
 
 
-# ======================
-# RECORDING STATUS CALLBACK
-# ======================
-@app.route("/recording-status", methods=["POST"])
-def recording_status():
-    recording_url = request.form.get("RecordingUrl")
-    from_number = request.form.get("From")
-    print(f"New voicemail from {from_number}: {recording_url}")
-    # You can also store this in a database or send a notification
-    return ("", 204)
+@app.route("/voicemail-complete", methods=["POST"])
+def voicemail_complete():
+    response = VoiceResponse()
+    response.say("Your message has been recorded. Goodbye.", voice="alice")
+    response.hangup()
+    return Response(str(response), mimetype="text/xml")
 
 
 # ======================
@@ -90,8 +89,7 @@ def sms():
 # ======================
 # START SERVER
 # ======================
-import os
-
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 3000))
     app.run(host="0.0.0.0", port=port)
+
