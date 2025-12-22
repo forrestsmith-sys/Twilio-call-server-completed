@@ -20,16 +20,12 @@ TEAM_NUMBERS = [
 # ======================
 @app.route("/voice", methods=["POST"])
 def voice():
-    """
-    First step: ring the team.
-    After Dial finishes (no answer, busy, etc.), Twilio POSTs to /voicemail.
-    """
     response = VoiceResponse()
 
     dial = Dial(
         timeout=20,
         callerId=TWILIO_NUMBER,
-        action="/voicemail",   # Twilio will request this URL when Dial ends
+        action="/voicemail",   # Twilio calls this if Dial ends
         method="POST"
     )
 
@@ -37,59 +33,46 @@ def voice():
         dial.number(number)
 
     response.append(dial)
-
     return Response(str(response), mimetype="text/xml")
 
 
+# ======================
+# VOICEMAIL
+# ======================
 @app.route("/voicemail", methods=["POST"])
 def voicemail():
-    """
-    Second step: this runs AFTER the Dial.
-    Plays your message and records voicemail.
-    """
-    dial_status = request.form.get("DialCallStatus", "")
-
-    # Optional: only go to voicemail on specific statuses
-    # common: no-answer, busy, failed, canceled
-    # If you want *always* voicemail after Dial, you can skip this if.
-    if dial_status not in ("no-answer", "busy", "failed", "canceled", ""):
-        # If someone actually answered and then hung up, just end the call.
-        response = VoiceResponse()
-        response.hangup()
-        return Response(str(response), mimetype="text/xml")
-
     response = VoiceResponse()
 
     response.say(
-        "If this is a medical emergency, please hang up and dial 9 1 1. "
+        "If this is a medical emergency, please hang up and dial 911. "
         "You have reached Doctor Daliva's office. "
         "Our office hours are Monday through Friday, 8 A M to 5 P M. "
-        "Please leave a detailed message with your name and callback number.",
+        "Please leave a detailed message with your name and callback number after the beep.",
         voice="alice"
     )
 
-    # Record up to 120 seconds with a beep
     response.record(
-        maxLength=120,
-        playBeep=True
-        # You can also add:
-        # recordingStatusCallback="/recording-status",
-        # recordingStatusCallbackMethod="POST"
+        max_length=120,
+        play_beep=True,
+        recording_status_callback="/recording-status",
+        recording_status_callback_method="POST"
     )
 
     response.say("Thank you. Goodbye.", voice="alice")
     response.hangup()
-
     return Response(str(response), mimetype="text/xml")
 
 
-# Optional: handle recording callback if you want to log or notify
-# @app.route("/recording-status", methods=["POST"])
-# def recording_status():
-#     # recording_url = request.form.get("RecordingUrl")
-#     # from_number = request.form.get("From")
-#     # Do something with the recording (store, notify, etc.)
-#     return ("", 204)
+# ======================
+# RECORDING STATUS CALLBACK
+# ======================
+@app.route("/recording-status", methods=["POST"])
+def recording_status():
+    recording_url = request.form.get("RecordingUrl")
+    from_number = request.form.get("From")
+    print(f"New voicemail from {from_number}: {recording_url}")
+    # You can also store this in a database or send a notification
+    return ("", 204)
 
 
 # ======================
@@ -98,11 +81,9 @@ def voicemail():
 @app.route("/sms", methods=["POST"])
 def sms():
     response = MessagingResponse()
-
     response.message(
         "Thanks for texting Align Medicine! We received your message and will respond shortly."
     )
-
     return Response(str(response), mimetype="text/xml")
 
 
