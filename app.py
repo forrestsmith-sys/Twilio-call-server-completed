@@ -15,17 +15,22 @@ TEAM_NUMBERS = [
 ]
 # ==================
 
+
 # ======================
 # INBOUND VOICE CALLS
 # ======================
 @app.route("/voice", methods=["POST"])
 def voice():
+    """
+    First step: ring the team.
+    After Dial finishes (no answer, busy, etc.), Twilio POSTs to /voicemail.
+    """
     response = VoiceResponse()
 
     dial = Dial(
         timeout=20,
         callerId=TWILIO_NUMBER,
-        action="/voicemail",   # Always goes to voicemail if Dial ends
+        action="/voicemail",   # Twilio will request this URL when Dial ends
         method="POST"
     )
 
@@ -33,7 +38,6 @@ def voice():
         dial.number(number)
 
     response.append(dial)
-
     return Response(str(response), mimetype="text/xml")
 
 
@@ -42,26 +46,32 @@ def voice():
 # ======================
 @app.route("/voicemail", methods=["POST"])
 def voicemail():
+    """
+    Only trigger voicemail if call was not answered.
+    """
     response = VoiceResponse()
+    dial_status = request.form.get("DialCallStatus", "")
 
-    # Always go to voicemail after Dial
-    response.say(
-        "If this is a medical emergency, please hang up and dial 911. "
-        "You have reached Doctor Daliva's office. "
-        "Our office hours are Monday through Friday, 8 AM to 5 PM. "
-        "Please leave a detailed message with your name and callback number.",
-        voice="alice"
-    )
-
-    response.record(
-        maxLength=120,
-        playBeep=True,
-        action="/voicemail-complete",
-        method="POST"
-    )
-
-    response.say("Thank you. Goodbye.", voice="alice")
-    response.hangup()
+    # Trigger voicemail only if no answer, busy, failed, or canceled
+    if dial_status in ("no-answer", "busy", "failed", "canceled", ""):
+        response.say(
+            "If this is a medical emergency, please hang up and dial 911. "
+            "You have reached Doctor Daliva's office. "
+            "Our office hours are Monday through Friday, 8 AM to 5 PM. "
+            "Please leave a detailed message with your name and callback number.",
+            voice="alice"
+        )
+        response.record(
+            maxLength=120,
+            playBeep=True,
+            action="/voicemail-complete",
+            method="POST"
+            # Optional: recordingStatusCallback="/recording-status"
+        )
+        response.say("Thank you. Goodbye.", voice="alice")
+    else:
+        # Someone answered; end call without voicemail
+        response.hangup()
 
     return Response(str(response), mimetype="text/xml")
 
@@ -69,9 +79,18 @@ def voicemail():
 @app.route("/voicemail-complete", methods=["POST"])
 def voicemail_complete():
     response = VoiceResponse()
-    response.say("Your message has been recorded. Goodbye.", voice="alice")
+    response.say("Thank you. Goodbye.", voice="alice")
     response.hangup()
     return Response(str(response), mimetype="text/xml")
+
+
+# Optional: handle recording callback if you want to log or notify
+# @app.route("/recording-status", methods=["POST"])
+# def recording_status():
+#     recording_url = request.form.get("RecordingUrl")
+#     from_number = request.form.get("From")
+#     # Do something with the recording (store, notify, etc.)
+#     return ("", 204)
 
 
 # ======================
