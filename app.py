@@ -2,7 +2,6 @@ from flask import Flask, Response, request
 from twilio.twiml.voice_response import VoiceResponse, Dial
 from twilio.twiml.messaging_response import MessagingResponse
 from datetime import datetime
-import pytz
 import os
 
 app = Flask(__name__)
@@ -22,10 +21,9 @@ TEAM_NUMBERS = [
 # BUSINESS HOURS CHECK
 # ======================
 def is_business_hours():
-    tz = pytz.timezone("US/Pacific")  # adjust if needed
-    now = datetime.now(tz)
+    now = datetime.now()  # uses server local time
 
-    # Weekend check (Saturday=5, Sunday=6)
+    # Saturday (5) or Sunday (6)
     if now.weekday() >= 5:
         return False
 
@@ -95,7 +93,7 @@ def handle_menu():
         response.append(dial)
 
     elif choice == "2":
-        # Prospective patient → voicemail directly
+        # Prospective patient → voicemail
         response.redirect("/voicemail")
 
     else:
@@ -161,4 +159,3 @@ def sms():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 3000))
     app.run(host="0.0.0.0", port=port)
-
