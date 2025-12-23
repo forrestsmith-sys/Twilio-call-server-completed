@@ -1,7 +1,7 @@
 from flask import Flask, Response, request
 from twilio.twiml.voice_response import VoiceResponse, Dial
 from twilio.twiml.messaging_response import MessagingResponse
-from datetime import datetime
+import time
 import os
 
 app = Flask(__name__)
@@ -21,14 +21,17 @@ TEAM_NUMBERS = [
 # BUSINESS HOURS CHECK
 # ======================
 def is_business_hours():
-    now = datetime.now()  # uses server local time
+    now = time.localtime()  # uses server local time (PST)
 
-    # Saturday (5) or Sunday (6)
-    if now.weekday() >= 5:
+    weekday = now.tm_wday  # Monday=0, Sunday=6
+    hour = now.tm_hour
+
+    # Weekend check
+    if weekday >= 5:
         return False
 
     # Business hours: 8 AM – 5 PM
-    return 8 <= now.hour < 17
+    return 8 <= hour < 17
 
 
 # ======================
@@ -112,9 +115,10 @@ def voicemail():
     response = VoiceResponse()
     dial_status = request.form.get("DialCallStatus", "")
 
+    # Trigger voicemail if no agent answered OR direct-to-voicemail
     if dial_status in ("no-answer", "busy", "failed", "canceled", ""):
         response.say(
-            "If this is a medical emergency, please hang up and dial 911. "
+            "If this is a medical emergency, please hang up and dial 9 1 1. "
             "You have reached Doctor Daliva's office. "
             "Our office hours are Monday through Friday, 8 A M to 5 P M. "
             "Please leave a detailed message with your name and callback number.",
@@ -159,3 +163,4 @@ def sms():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 3000))
     app.run(host="0.0.0.0", port=port)
+
