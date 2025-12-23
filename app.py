@@ -1,7 +1,8 @@
 from flask import Flask, Response, request
 from twilio.twiml.voice_response import VoiceResponse, Dial
 from twilio.twiml.messaging_response import MessagingResponse
-import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import os
 
 app = Flask(__name__)
@@ -18,19 +19,20 @@ TEAM_NUMBERS = [
 
 
 # ======================
-# BUSINESS HOURS CHECK
+# BUSINESS HOURS CHECK (PST, DST-SAFE)
 # ======================
 def is_business_hours():
-    now = time.localtime()  # uses server local time (PST)
+    pacific = ZoneInfo("America/Los_Angeles")
+    now = datetime.now(pacific)
 
-    weekday = now.tm_wday  # Monday=0, Sunday=6
-    hour = now.tm_hour
+    weekday = now.weekday()  # Monday=0, Sunday=6
+    hour = now.hour
 
-    # Weekend check
+    # Weekend
     if weekday >= 5:
         return False
 
-    # Business hours: 8 AM – 5 PM
+    # Business hours: 8 AM – 5 PM PST
     return 8 <= hour < 17
 
 
@@ -45,7 +47,7 @@ def voice_menu():
     if not is_business_hours():
         response.say(
             "You have reached Doctor Daliva's office. "
-            "Our office hours are Monday through Friday, 8 A M to 5 P M. "
+            "Our office hours are Monday through Friday, 8 A M to 5 P M Pacific Time. "
             "Please leave a message and we will return your call on the next business day.",
             voice="alice"
         )
@@ -62,7 +64,7 @@ def voice_menu():
 
     gather.say(
         "Thank you for calling Doctor Daliva's office. "
-        "Our office hours are Monday through Friday, 8 A M to 5 P M. "
+        "Our office hours are Monday through Friday, 8 A M to 5 P M Pacific Time. "
         "If you are an existing patient, a pharmacist, or calling from a provider's office, press 1. "
         "If you are a prospective patient, press 2.",
         voice="alice"
@@ -82,7 +84,6 @@ def handle_menu():
     choice = request.form.get("Digits")
 
     if choice == "1":
-        # Existing patient / pharmacist / provider → ring agents
         dial = Dial(
             timeout=20,
             callerId=TWILIO_NUMBER,
@@ -96,11 +97,9 @@ def handle_menu():
         response.append(dial)
 
     elif choice == "2":
-        # Prospective patient → voicemail
         response.redirect("/voicemail")
 
     else:
-        # Invalid input → repeat menu
         response.say("Invalid selection.", voice="alice")
         response.redirect("/voice")
 
@@ -115,12 +114,10 @@ def voicemail():
     response = VoiceResponse()
     dial_status = request.form.get("DialCallStatus", "")
 
-    # Trigger voicemail if no agent answered OR direct-to-voicemail
     if dial_status in ("no-answer", "busy", "failed", "canceled", ""):
         response.say(
             "If this is a medical emergency, please hang up and dial 9 1 1. "
             "You have reached Doctor Daliva's office. "
-            "Our office hours are Monday through Friday, 8 A M to 5 P M. "
             "Please leave a detailed message with your name and callback number.",
             voice="alice"
         )
@@ -146,7 +143,7 @@ def voicemail_complete():
 
 
 # ======================
-# SMS TEXT MESSAGES
+# SMS
 # ======================
 @app.route("/sms", methods=["POST"])
 def sms():
