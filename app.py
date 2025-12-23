@@ -1,6 +1,8 @@
 from flask import Flask, Response, request
 from twilio.twiml.voice_response import VoiceResponse, Dial
 from twilio.twiml.messaging_response import MessagingResponse
+from datetime import datetime
+import pytz
 import os
 
 app = Flask(__name__)
@@ -17,27 +19,90 @@ TEAM_NUMBERS = [
 
 
 # ======================
-# INBOUND VOICE CALLS
+# BUSINESS HOURS CHECK
+# ======================
+def is_business_hours():
+    tz = pytz.timezone("US/Pacific")  # adjust if needed
+    now = datetime.now(tz)
+
+    # Weekend check (Saturday=5, Sunday=6)
+    if now.weekday() >= 5:
+        return False
+
+    # Business hours: 8 AM – 5 PM
+    return 8 <= now.hour < 17
+
+
+# ======================
+# MAIN PHONE ENTRY
 # ======================
 @app.route("/voice", methods=["POST"])
-def voice():
-    """
-    First step: ring the team.
-    After Dial finishes (no answer, busy, etc.), Twilio POSTs to /voicemail.
-    """
+def voice_menu():
     response = VoiceResponse()
 
-    dial = Dial(
-        timeout=20,
-        callerId=TWILIO_NUMBER,
-        action="/voicemail",   # Twilio will request this URL when Dial ends
-        method="POST"
+    # After hours or weekends → voicemail
+    if not is_business_hours():
+        response.say(
+            "You have reached Doctor Daliva's office. "
+            "Our office hours are Monday through Friday, 8 A M to 5 P M. "
+            "Please leave a message and we will return your call on the next business day.",
+            voice="alice"
+        )
+        response.redirect("/voicemail")
+        return Response(str(response), mimetype="text/xml")
+
+    # Business hours → menu
+    gather = response.gather(
+        num_digits=1,
+        action="/handle-menu",
+        method="POST",
+        timeout=5
     )
 
-    for number in TEAM_NUMBERS:
-        dial.number(number)
+    gather.say(
+        "Thank you for calling Doctor Daliva's office. "
+        "Our office hours are Monday through Friday, 8 A M to 5 P M. "
+        "If you are an existing patient, a pharmacist, or calling from a provider's office, press 1. "
+        "If you are a prospective patient, press 2.",
+        voice="alice"
+    )
 
-    response.append(dial)
+    # No input → voicemail
+    response.redirect("/voicemail")
+    return Response(str(response), mimetype="text/xml")
+
+
+# ======================
+# HANDLE MENU SELECTION
+# ======================
+@app.route("/handle-menu", methods=["POST"])
+def handle_menu():
+    response = VoiceResponse()
+    choice = request.form.get("Digits")
+
+    if choice == "1":
+        # Existing patient / pharmacist / provider → ring agents
+        dial = Dial(
+            timeout=20,
+            callerId=TWILIO_NUMBER,
+            action="/voicemail",
+            method="POST"
+        )
+
+        for number in TEAM_NUMBERS:
+            dial.number(number)
+
+        response.append(dial)
+
+    elif choice == "2":
+        # Prospective patient → voicemail directly
+        response.redirect("/voicemail")
+
+    else:
+        # Invalid input → repeat menu
+        response.say("Invalid selection.", voice="alice")
+        response.redirect("/voice")
+
     return Response(str(response), mimetype="text/xml")
 
 
@@ -46,18 +111,14 @@ def voice():
 # ======================
 @app.route("/voicemail", methods=["POST"])
 def voicemail():
-    """
-    Only trigger voicemail if call was not answered.
-    """
     response = VoiceResponse()
     dial_status = request.form.get("DialCallStatus", "")
 
-    # Trigger voicemail only if no answer, busy, failed, or canceled
     if dial_status in ("no-answer", "busy", "failed", "canceled", ""):
         response.say(
             "If this is a medical emergency, please hang up and dial 911. "
             "You have reached Doctor Daliva's office. "
-            "Our office hours are Monday through Friday, 8 AM to 5 PM. "
+            "Our office hours are Monday through Friday, 8 A M to 5 P M. "
             "Please leave a detailed message with your name and callback number.",
             voice="alice"
         )
@@ -66,11 +127,9 @@ def voicemail():
             playBeep=True,
             action="/voicemail-complete",
             method="POST"
-            # Optional: recordingStatusCallback="/recording-status"
         )
         response.say("Thank you. Goodbye.", voice="alice")
     else:
-        # Someone answered; end call without voicemail
         response.hangup()
 
     return Response(str(response), mimetype="text/xml")
@@ -82,15 +141,6 @@ def voicemail_complete():
     response.say("Thank you. Goodbye.", voice="alice")
     response.hangup()
     return Response(str(response), mimetype="text/xml")
-
-
-# Optional: handle recording callback if you want to log or notify
-# @app.route("/recording-status", methods=["POST"])
-# def recording_status():
-#     recording_url = request.form.get("RecordingUrl")
-#     from_number = request.form.get("From")
-#     # Do something with the recording (store, notify, etc.)
-#     return ("", 204)
 
 
 # ======================
