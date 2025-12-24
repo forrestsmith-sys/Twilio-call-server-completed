@@ -19,7 +19,7 @@ TEAM_NUMBERS = [
 
 
 # ======================
-# BUSINESS HOURS CHECK (PST, DST-SAFE)
+# BUSINESS + HOLIDAY HOURS CHECK (PST, DST-SAFE)
 # ======================
 def is_business_hours():
     pacific = ZoneInfo("America/Los_Angeles")
@@ -27,12 +27,28 @@ def is_business_hours():
 
     weekday = now.weekday()  # Monday=0, Sunday=6
     hour = now.hour
+    month = now.month
+    day = now.day
 
     # Weekend
     if weekday >= 5:
         return False
 
-    # Business hours: 8 AM – 5 PM PST
+    # ---- CHRISTMAS HOLIDAYS ----
+
+    # Christmas Eve – Dec 24 (closed after 2 PM)
+    if month == 12 and day == 24:
+        return hour < 14
+
+    # Christmas Day – Dec 25 (closed all day)
+    if month == 12 and day == 25:
+        return False
+
+    # Day after Christmas – Dec 26 (closed after 2 PM)
+    if month == 12 and day == 26:
+        return hour < 14
+
+    # ---- NORMAL BUSINESS HOURS ----
     return 8 <= hour < 17
 
 
@@ -43,11 +59,11 @@ def is_business_hours():
 def voice_menu():
     response = VoiceResponse()
 
-    # After hours or weekends → voicemail
     if not is_business_hours():
         response.say(
-            "You have reached Doctor Daliva's office. "
+            "If this is a emergency please call 911 or go to the emergency room. You have reached Doctor Daliva's office. "
             "Our office hours are Monday through Friday, 8 A M to 5 P M Pacific Time. "
+            "We are currently closed for after hours or a holiday. "
             "Please leave a message and we will return your call on the next business day.",
             voice="alice"
         )
@@ -70,7 +86,6 @@ def voice_menu():
         voice="alice"
     )
 
-    # No input → voicemail
     response.redirect("/voicemail")
     return Response(str(response), mimetype="text/xml")
 
