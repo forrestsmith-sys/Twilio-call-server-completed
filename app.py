@@ -18,8 +18,7 @@ TEAM_NUMBERS = [
     "+16502014457",   # Mariza
 ]
 
-AGENT_PIN = "4321"  # move to env/db later
-
+AGENT_PIN = "4321"  # General PIN for unknown agent numbers
 
 # ======================
 # BUSINESS + HOLIDAY HOURS
@@ -27,7 +26,6 @@ AGENT_PIN = "4321"  # move to env/db later
 def is_business_hours():
     pacific = ZoneInfo("America/Los_Angeles")
     now = datetime.now(pacific)
-
     weekday = now.weekday()
     hour = now.hour
     month = now.month
@@ -35,7 +33,6 @@ def is_business_hours():
 
     if weekday >= 5:
         return False
-
     if month == 12 and day == 24:
         return hour < 14
     if month == 12 and day == 25:
@@ -45,9 +42,8 @@ def is_business_hours():
 
     return 8 <= hour < 17
 
-
 # ======================
-# MAIN ENTRY (AGENT / PATIENT ROUTING)
+# MAIN ENTRY
 # ======================
 @app.route("/voice", methods=["POST"])
 def voice():
@@ -59,7 +55,7 @@ def voice():
         response.redirect("/agent-ivr")
         return Response(str(response), mimetype="text/xml")
 
-    # Unknown number → optional staff PIN
+    # Unknown number → ask for PIN
     gather = response.gather(
         num_digits=4,
         action="/verify-agent-pin",
@@ -71,10 +67,8 @@ def voice():
         "Otherwise, please stay on the line.",
         voice="alice"
     )
-
     response.redirect("/patient-entry")
     return Response(str(response), mimetype="text/xml")
-
 
 # ======================
 # VERIFY AGENT PIN
@@ -92,7 +86,6 @@ def verify_agent_pin():
 
     return Response(str(response), mimetype="text/xml")
 
-
 # ======================
 # PATIENT ENTRY (EXISTING LOGIC)
 # ======================
@@ -103,8 +96,8 @@ def patient_entry():
     if not is_business_hours():
         response.say(
             "If this is an emergency please call 9 1 1 or go to the emergency room. "
-            "You have reached Doctor Daliva's office. "
-            "We are currently closed. Please leave a message.",
+            "You have reached Doctor Daliva's office. We are currently closed. "
+            "Please leave a message.",
             voice="alice"
         )
         response.redirect("/voicemail")
@@ -125,7 +118,6 @@ def patient_entry():
 
     response.redirect("/voicemail")
     return Response(str(response), mimetype="text/xml")
-
 
 # ======================
 # PATIENT MENU
@@ -155,9 +147,8 @@ def handle_menu():
 
     return Response(str(response), mimetype="text/xml")
 
-
 # ======================
-# AGENT IVR → PATIENT ID
+# AGENT IVR → ENTER PHONE NUMBER DIRECTLY
 # ======================
 @app.route("/agent-ivr", methods=["POST"])
 def agent_ivr():
@@ -168,38 +159,36 @@ def agent_ivr():
         method="POST"
     )
     gather.say(
-        "Please enter the patient I D followed by the pound key.",
+        "Please enter the patient’s phone number followed by the pound key.",
         voice="alice"
     )
     return Response(str(response), mimetype="text/xml")
 
-
 # ======================
-# DIAL PATIENT (RECORDED)
+# DIAL PATIENT
 # ======================
 @app.route("/dial-patient", methods=["POST"])
 def dial_patient():
     response = VoiceResponse()
-    patient_id = request.form.get("Digits")
+    digits = request.form.get("Digits")  # Agent entered patient number
 
-    # TODO: Replace with real lookup
-    patient_phone = "+15551234567"
+    if not digits or len(digits) < 7:  # basic validation
+        response.say("Invalid phone number. Goodbye.", voice="alice")
+        response.hangup()
+        return Response(str(response), mimetype="text/xml")
 
+    patient_phone = f"+{digits}"  # Use exactly what agent entered with + prefix
+
+    # Dial with recording and patient-only disclosure
     dial = Dial(
         callerId=TWILIO_NUMBER,
         record="record-from-answer",
         recordingStatusCallback="/recording-complete"
     )
-
-    # Patient-only disclosure
-    dial.number(
-        patient_phone,
-        url="/patient-recording-disclosure"
-    )
-
+    dial.number(patient_phone, url="/patient-recording-disclosure")
     response.append(dial)
-    return Response(str(response), mimetype="text/xml")
 
+    return Response(str(response), mimetype="text/xml")
 
 # ======================
 # PATIENT RECORDING DISCLOSURE
@@ -213,7 +202,6 @@ def patient_recording_disclosure():
     )
     return Response(str(response), mimetype="text/xml")
 
-
 # ======================
 # RECORDING CALLBACK
 # ======================
@@ -221,7 +209,6 @@ def patient_recording_disclosure():
 def recording_complete():
     # Save RecordingSid, CallSid, Duration, etc.
     return ("", 204)
-
 
 # ======================
 # VOICEMAIL
@@ -242,14 +229,12 @@ def voicemail():
     response.say("Thank you. Goodbye.", voice="alice")
     return Response(str(response), mimetype="text/xml")
 
-
 @app.route("/voicemail-complete", methods=["POST"])
 def voicemail_complete():
     response = VoiceResponse()
     response.say("Thank you. Goodbye.", voice="alice")
     response.hangup()
     return Response(str(response), mimetype="text/xml")
-
 
 # ======================
 # SMS
@@ -262,12 +247,9 @@ def sms():
     )
     return Response(str(response), mimetype="text/xml")
 
-
 # ======================
 # START SERVER
 # ======================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 3000))
     app.run(host="0.0.0.0", port=port)
-
-
