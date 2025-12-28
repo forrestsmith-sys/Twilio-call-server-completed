@@ -46,7 +46,6 @@ def spell_out_digits(number: str) -> str:
 def validate_twilio_request(f):
     if not TWILIO_AUTH_TOKEN:
         return f  # dev mode
-
     from twilio.request_validator import RequestValidator
 
     @wraps(f)
@@ -55,7 +54,6 @@ def validate_twilio_request(f):
         signature = request.headers.get("X-Twilio-Signature", "")
         url = request.url
         form = request.form.to_dict(flat=True)
-
         if not validator.validate(url, form, signature):
             return abort(403)
         return f(*args, **kwargs)
@@ -107,12 +105,19 @@ def voice():
     response = VoiceResponse()
     from_number = request.form.get("From")
 
-    # Announce recording for inbound calls
+    # Announce recording and emergency instructions
     response.say(
-        "This call may be recorded for quality and training purposes.",
+        "This call may be recorded for quality and training purposes. "
+        "If this is an emergency, please hang up and call 9 1 1.",
         voice="alice"
     )
 
+    # Team members go straight to agent IVR
+    if from_number in TEAM_NUMBERS:
+        response.redirect("/agent-ivr")
+        return Response(str(response), mimetype="text/xml")
+
+    # Present main menu: 1 = existing, 2 = prospective, 3 = staff
     gather = response.gather(
         num_digits=1,
         action="/handle-menu",
@@ -122,14 +127,16 @@ def voice():
     gather.say(
         "Thank you for calling Doctor Daliva's office. "
         "If you are an existing patient, a pharmacist, or calling from a provider's office, press 1. "
-        "If you are a prospective patient, press 2.",
+        "If you are a prospective patient, press 2. "
+        "If you are a staff member, press 3.",
         voice="alice"
     )
+
     response.redirect("/voicemail")
     return Response(str(response), mimetype="text/xml")
 
 # ======================
-# PATIENT MENU
+# HANDLE MENU
 # ======================
 @app.route("/handle-menu", methods=["POST"])
 @validate_twilio_request
@@ -137,8 +144,7 @@ def handle_menu():
     response = VoiceResponse()
     choice = request.form.get("Digits")
 
-    if choice == "1":
-        # Existing patient → dial team members
+    if choice == "1":  # Existing patient
         dial = Dial(
             timeout=20,
             callerId=TWILIO_NUMBER,
@@ -149,29 +155,39 @@ def handle_menu():
         for number in TEAM_NUMBERS:
             dial.number(number)
         response.append(dial)
-
-    elif choice == "2":
-        # Prospective patient → go to voicemail
+    elif choice == "2":  # Prospective patient
         response.redirect("/voicemail")
-
-    elif choice == "3":
-        # Staff / agent option (PIN required)
+    elif choice == "3":  # Staff PIN
         gather = response.gather(
             num_digits=4,
             action="/verify-agent-pin",
             method="POST",
-            timeout=5,
+            timeout=5
         )
-        gather.say(
-            "Please enter your four digit staff PIN now.",
-            voice="alice"
-        )
-        response.redirect("/voicemail")  # fallback
-
+        gather.say("Please enter your four digit PIN now.", voice="alice")
+        response.redirect("/voice")
     else:
         response.say("Invalid selection.", voice="alice")
         response.redirect("/voice")
 
+    return Response(str(response), mimetype="text/xml")
+
+# ======================
+# VERIFY PIN
+# ======================
+@app.route("/verify-agent-pin", methods=["POST"])
+@validate_twilio_request
+def verify_agent_pin():
+    response = VoiceResponse()
+    pin = request.form.get("Digits")
+    from_number = request.form.get("From")
+
+    if pin == AGENT_PIN:
+        response.redirect("/agent-ivr")
+    else:
+        response.say("Invalid pin. Goodbye.", voice="alice")
+        response.hangup()
+        print(f"Failed PIN attempt from {from_number} at {datetime.now()}")
     return Response(str(response), mimetype="text/xml")
 
 # ======================
@@ -207,7 +223,6 @@ def confirm_number():
         response.hangup()
         return Response(str(response), mimetype="text/xml")
 
-    # Spell out digits for clarity
     spoken_number = spell_out_digits(patient_phone)
 
     gather = response.gather(
@@ -344,4 +359,3 @@ def sms():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 3000))
     app.run(host="0.0.0.0", port=port)
-
