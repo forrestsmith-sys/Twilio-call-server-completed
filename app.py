@@ -1,9 +1,8 @@
-from flask import Flask, Response, request, abort, send_from_directory
+from flask import Flask, Response, request, send_from_directory
 from twilio.twiml.voice_response import VoiceResponse, Dial
 from twilio.twiml.messaging_response import MessagingResponse
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from functools import wraps
 import os
 import re
 import requests
@@ -29,7 +28,6 @@ AGENT_PIN = os.environ.get("AGENT_PIN", "4321")
 # ======================
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
-
 ROCKETCHAT_WEBHOOK_URL = os.environ.get("ROCKETCHAT_WEBHOOK_URL")
 
 PUBLIC_BASE_URL = os.environ.get(
@@ -107,9 +105,7 @@ def handle_menu():
     if choice == "1":
         d = Dial(
             callerId=TWILIO_NUMBER,
-            record="record-from-answer",
-            recordingStatusCallback="/recording-complete",
-            recordingStatusCallbackMethod="POST"
+            record="record-from-answer"
         )
         for n in TEAM_NUMBERS:
             d.number(n)
@@ -177,9 +173,7 @@ def dial_patient():
 
     d = Dial(
         callerId=TWILIO_NUMBER,
-        record="record-from-answer",
-        recordingStatusCallback="/recording-complete",
-        recordingStatusCallbackMethod="POST"
+        record="record-from-answer"
     )
     d.number(num, url="/patient-recording-disclosure")
     r.append(d)
@@ -204,6 +198,8 @@ def voicemail():
         playBeep=True,
         transcribe=True,
         transcribeCallback="/voicemail-transcription",
+        recordingStatusCallback="/voicemail-recording-ready",
+        recordingStatusCallbackMethod="POST",
         action="/voicemail-complete"
     )
     return Response(str(r), mimetype="text/xml")
@@ -213,26 +209,22 @@ def voicemail_complete():
     return ("", 204)
 
 # ======================
-# RECORDING CALLBACK
+# RECORDING READY (DOWNLOAD AUDIO)
 # ======================
-@app.route("/recording-complete", methods=["POST"])
-def recording_complete():
-    return ("", 204)
-
-# ======================
-# TRANSCRIPTION + ROCKET.CHAT
-# ======================
-@app.route("/voicemail-transcription", methods=["POST"])
-def voicemail_transcription():
+@app.route("/voicemail-recording-ready", methods=["POST"])
+def voicemail_recording_ready():
     recording_url = request.form.get("RecordingUrl")
-    transcription = request.form.get("TranscriptionText", "No transcription available")
+
+    if not recording_url:
+        return ("", 204)
 
     filename = f"vm_{int(datetime.utcnow().timestamp())}.mp3"
     filepath = os.path.join(VOICEMAIL_DIR, filename)
 
     audio = requests.get(
         recording_url + ".mp3",
-        auth=HTTPBasicAuth(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        auth=HTTPBasicAuth(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+        timeout=10
     )
 
     with open(filepath, "wb") as f:
@@ -242,20 +234,32 @@ def voicemail_transcription():
 
     requests.post(
         ROCKETCHAT_WEBHOOK_URL,
-        json={
-            "text": (
-                "📞 **New Voicemail**\n\n"
-                f"📝 {transcription}\n\n"
-                f"🔊 {public_url}"
-            )
-        },
+        json={"text": f"📞 **New Voicemail Audio**\n\n🔊 {public_url}"},
         timeout=5
     )
 
     return ("", 204)
 
 # ======================
-# SERVE VOICEMAILS
+# TRANSCRIPTION CALLBACK
+# ======================
+@app.route("/voicemail-transcription", methods=["POST"])
+def voicemail_transcription():
+    transcription = request.form.get(
+        "TranscriptionText",
+        "No transcription available."
+    )
+
+    requests.post(
+        ROCKETCHAT_WEBHOOK_URL,
+        json={"text": f"📝 **Voicemail Transcription**\n\n{transcription}"},
+        timeout=5
+    )
+
+    return ("", 204)
+
+# ======================
+# SERVE VOICEMAIL FILES
 # ======================
 @app.route("/voicemails/<filename>")
 def serve_voicemail(filename):
@@ -275,4 +279,3 @@ def sms():
 # ======================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 3000)))
-
