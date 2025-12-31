@@ -1,3 +1,4 @@
+
 from flask import Flask, Response, request, send_from_directory
 from twilio.twiml.voice_response import VoiceResponse, Dial
 from twilio.twiml.messaging_response import MessagingResponse
@@ -13,9 +14,17 @@ app = Flask(__name__)
 # ======================
 # CONFIG
 # ======================
-TWILIO_NUMBER = "+19099705700"
-TEAM_NUMBERS = ["+19097810829", "+19094377512", "+16502014457"]
+TWILIO_NUMBER = os.environ.get("TWILIO_NUMBER", "+19099705700")
+TEAM_NUMBERS = [
+    "+19097810829",
+    "+19094377512",
+    "+16502014457",
+]
 AGENT_PIN = os.environ.get("AGENT_PIN", "4321")
+
+# ======================
+# SECRETS (ENV VARS ONLY)
+# ======================
 TWILIO_ACCOUNT_SID = os.environ["TWILIO_ACCOUNT_SID"]
 TWILIO_AUTH_TOKEN = os.environ["TWILIO_AUTH_TOKEN"]
 ROCKETCHAT_WEBHOOK_URL = os.environ["ROCKETCHAT_WEBHOOK_URL"]
@@ -71,6 +80,7 @@ def patient_entry():
     if not is_business_hours():
         r.redirect("/voicemail")
         return Response(str(r), mimetype="text/xml")
+
     g = r.gather(num_digits=1, action="/handle-menu", timeout=5)
     g.say(
         "Press 1 if you are an existing patient or provider. "
@@ -137,7 +147,6 @@ def agent_ivr():
 def confirm_number():
     r = VoiceResponse()
     number = request.form.get("Digits")
-
     if not is_valid_phone(number):
         r.say("Invalid number.", voice="alice")
         r.redirect("/agent-ivr")
@@ -203,29 +212,30 @@ def recording_complete():
 def voicemail_transcription():
     transcription = request.form.get("TranscriptionText", "No transcription available")
     recording_url = request.form.get("RecordingUrl")
-    
-    # Save voicemail locally
+    caller_number = request.form.get("From", "Unknown")
+
+    # Save voicemail
     filename = f"vm_{int(datetime.utcnow().timestamp())}.mp3"
     filepath = os.path.join(VOICEMAIL_DIR, filename)
     audio = requests.get(recording_url + ".mp3", auth=HTTPBasicAuth(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN))
     with open(filepath, "wb") as f:
         f.write(audio.content)
-    
+
     public_url = f"{PUBLIC_BASE_URL}/voicemails/{filename}"
-    
+
     # Post to Rocket.Chat
     try:
         resp = requests.post(
             ROCKETCHAT_WEBHOOK_URL,
             json={
-                "text": f"📞 **New Voicemail**\n\n📝 {transcription}\n\n🔊 {public_url}"
+                "text": f"📞 **New Voicemail from {caller_number}**\n\n📝 {transcription}\n\n🔊 Listen: {public_url}"
             },
-            timeout=15
+            timeout=30
         )
         print(f"Rocket.Chat response: {resp.status_code} {resp.text}")
     except Exception as e:
         print(f"Error sending to Rocket.Chat: {e}")
-    
+
     return ("", 204)
 
 # ======================
@@ -248,5 +258,7 @@ def sms():
 # START
 # ======================
 if __name__ == "__main__":
+    # Optional debug for Render logs
+    print("Starting Twilio Flask app...")
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 3000)))
 
