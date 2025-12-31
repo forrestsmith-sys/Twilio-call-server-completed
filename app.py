@@ -8,34 +8,28 @@ import os
 import re
 import requests
 from requests.auth import HTTPBasicAuth
-import sys
 
 app = Flask(__name__)
 
 # ======================
-# SAFE ENV VAR LOADING
-# ======================
-def get_env(var_name):
-    value = os.environ.get(var_name)
-    if not value:
-        print(f"❌ ERROR: Required environment variable '{var_name}' is missing!")
-        sys.exit(1)
-    return value
-
-TWILIO_ACCOUNT_SID = get_env("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = get_env("TWILIO_AUTH_TOKEN")
-ROCKETCHAT_WEBHOOK_URL = get_env("ROCKETCHAT_WEBHOOK_URL")
-PUBLIC_BASE_URL = get_env("PUBLIC_BASE_URL")
-AGENT_PIN = get_env("AGENT_PIN")
-
-# ======================
 # CONFIG
 # ======================
-TWILIO_NUMBER = "+19099705700"
-TEAM_NUMBERS = ["+19097810829", "+19094377512", "+16502014457"]
+TWILIO_NUMBER = os.environ.get("TWILIO_NUMBER", "+19099705700")
+TEAM_NUMBERS = os.environ.get("TEAM_NUMBERS", "+19097810829,+19094377512,+16502014457").split(",")
+AGENT_PIN = os.environ.get("AGENT_PIN", "4321")
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://twilio-call-server-completed-with.onrender.com")
 
-# Voicemails stored in a folder inside the project
-VOICEMAIL_DIR = os.path.join(os.getcwd(), "voicemails")
+# ======================
+# SECRETS
+# ======================
+TWILIO_ACCOUNT_SID = os.environ["TWILIO_ACCOUNT_SID"]
+TWILIO_AUTH_TOKEN = os.environ["TWILIO_AUTH_TOKEN"]
+ROCKETCHAT_WEBHOOK_URL = os.environ["ROCKETCHAT_WEBHOOK_URL"]
+
+# ======================
+# VOICEMAIL STORAGE
+# ======================
+VOICEMAIL_DIR = "voicemails"
 os.makedirs(VOICEMAIL_DIR, exist_ok=True)
 
 # ======================
@@ -57,33 +51,14 @@ def is_business_hours():
     return now.weekday() < 5 and 8 <= now.hour < 17
 
 # ======================
-# TWILIO VALIDATION (Optional)
-# ======================
-def validate_twilio_request(f):
-    if not TWILIO_AUTH_TOKEN:
-        return f
-
-    from twilio.request_validator import RequestValidator
-    validator = RequestValidator(TWILIO_AUTH_TOKEN)
-
-    @wraps(f)
-    def wrapper(*args, **kwargs):
-        signature = request.headers.get("X-Twilio-Signature", "")
-        if not validator.validate(request.url, request.form, signature):
-            abort(403)
-        return f(*args, **kwargs)
-    return wrapper
-
-# ======================
 # INCOMING CALL
 # ======================
 @app.route("/voice", methods=["POST"])
-@validate_twilio_request
 def voice():
     r = VoiceResponse()
     r.say(
         "This call may be recorded for quality and training purposes. "
-        "If this is a medical emergency, hang up and dial 911.",
+        "If this is a medical emergency, please hang up and dial 9 1 1.",
         voice="alice"
     )
     r.redirect("/patient-entry")
@@ -124,11 +99,14 @@ def handle_menu():
         for n in TEAM_NUMBERS:
             d.number(n)
         r.append(d)
+
     elif choice == "2":
         r.redirect("/voicemail")
+
     elif choice == "3":
         g = r.gather(num_digits=4, action="/verify-pin")
-        g.say("Please enter your four-digit staff PIN.", voice="alice")
+        g.say("Please enter your four digit staff pin.", voice="alice")
+
     else:
         r.say("Invalid selection.", voice="alice")
         r.redirect("/patient-entry")
@@ -144,7 +122,7 @@ def verify_pin():
     if request.form.get("Digits") == AGENT_PIN:
         r.redirect("/agent-ivr")
     else:
-        r.say("Invalid PIN. Goodbye.", voice="alice")
+        r.say("Invalid pin. Goodbye.", voice="alice")
         r.hangup()
     return Response(str(r), mimetype="text/xml")
 
@@ -155,7 +133,7 @@ def verify_pin():
 def agent_ivr():
     r = VoiceResponse()
     g = r.gather(finishOnKey="#", action="/confirm-number")
-    g.say("Enter the patient phone number followed by pound.", voice="alice")
+    g.say("Enter the patient phone number, followed by pound.", voice="alice")
     return Response(str(r), mimetype="text/xml")
 
 @app.route("/confirm-number", methods=["POST"])
@@ -204,12 +182,16 @@ def voicemail():
         maxLength=180,
         playBeep=True,
         transcribe=True,
-        transcribeCallback="/voicemail-transcription"
+        transcribeCallback=f"{PUBLIC_BASE_URL}/voicemail-transcription"
     )
     return Response(str(r), mimetype="text/xml")
 
+@app.route("/recording-complete", methods=["POST"])
+def recording_complete():
+    return ("", 204)
+
 # ======================
-# VOICEMAIL TRANSCRIPTION + Rocket.Chat
+# VOICEMAIL TRANSCRIPTION + ROCKET.CHAT
 # ======================
 @app.route("/voicemail-transcription", methods=["POST"])
 def voicemail_transcription():
@@ -219,7 +201,7 @@ def voicemail_transcription():
     filename = f"vm_{int(datetime.utcnow().timestamp())}.mp3"
     filepath = os.path.join(VOICEMAIL_DIR, filename)
 
-    # Download the recording
+    # Download the Twilio recording
     audio = requests.get(
         recording_url + ".mp3",
         auth=HTTPBasicAuth(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
@@ -230,16 +212,13 @@ def voicemail_transcription():
     public_url = f"{PUBLIC_BASE_URL}/voicemails/{filename}"
 
     # Send to Rocket.Chat
-    try:
-        requests.post(
-            ROCKETCHAT_WEBHOOK_URL,
-            json={
-                "text": f"📞 **New Voicemail**\n\n📝 {transcription}\n\n🔊 {public_url}"
-            },
-            timeout=5
-        )
-    except Exception as e:
-        print(f"❌ Failed to send Rocket.Chat message: {e}")
+    requests.post(
+        ROCKETCHAT_WEBHOOK_URL,
+        json={
+            "text": f"📞 **New Voicemail**\n\n📝 {transcription}\n\n🔊 {public_url}"
+        },
+        timeout=5
+    )
 
     return ("", 204)
 
@@ -251,7 +230,7 @@ def serve_voicemail(filename):
     return send_from_directory(VOICEMAIL_DIR, filename)
 
 # ======================
-# SMS RESPONSE
+# SMS
 # ======================
 @app.route("/sms", methods=["POST"])
 def sms():
@@ -260,11 +239,7 @@ def sms():
     return Response(str(r), mimetype="text/xml")
 
 # ======================
-# START SERVER
+# START APP
 # ======================
 if __name__ == "__main__":
-    print("=== Checking environment variables ===")
-    for key in ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "ROCKETCHAT_WEBHOOK_URL", "PUBLIC_BASE_URL", "AGENT_PIN"]:
-        print(f"{key} is set") if os.environ.get(key) else print(f"{key} is MISSING")
-    print("=== Done checking environment variables ===")
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 3000)))
