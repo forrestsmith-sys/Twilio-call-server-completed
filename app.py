@@ -3,6 +3,27 @@ import requests
 from flask import Flask, request, Response, abort
 from twilio.twiml.voice_response import VoiceResponse
 from twilio.rest import Client
+import os
+
+# ======================
+# CHECK REQUIRED ENV VARS
+# ======================
+required_vars = [
+    "TWILIO_ACCOUNT_SID",
+    "TWILIO_AUTH_TOKEN",
+    "ROCKETCHAT_WEBHOOK_URL",
+    "PUBLIC_BASE_URL",
+    "AGENT_PIN"
+]
+
+print("=== Checking environment variables ===")
+for var in required_vars:
+    if var not in os.environ:
+        print(f"⚠️ Missing environment variable: {var}")
+    else:
+        print(f"{var} is set")
+print("=== Done checking environment variables ===\n")
+
 
 app = Flask(__name__)
 
