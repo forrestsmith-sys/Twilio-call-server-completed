@@ -1,252 +1,135 @@
-from flask import Flask, Response, request, send_from_directory
-from twilio.twiml.voice_response import VoiceResponse, Dial
-from twilio.twiml.messaging_response import MessagingResponse
-from datetime import datetime
-from zoneinfo import ZoneInfo
 import os
-import re
 import requests
-from requests.auth import HTTPBasicAuth
+from flask import Flask, request, Response, abort
+from twilio.twiml.voice_response import VoiceResponse
+from twilio.rest import Client
 
 app = Flask(__name__)
 
-# ======================
-# CONFIG
-# ======================
-TWILIO_NUMBER = "+19099705700"
+# ----------------------------
+# Environment Variables (Render)
+# ----------------------------
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
+ROCKETCHAT_WEBHOOK_URL = os.environ.get("ROCKETCHAT_WEBHOOK_URL")
+BASE_URL = os.environ.get("BASE_URL")  # e.g. https://your-app.onrender.com
 
-TEAM_NUMBERS = [
-    "+19097810829",
-    "+19094377512",
-    "+16502014457",
-]
+if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, ROCKETCHAT_WEBHOOK_URL, BASE_URL]):
+    raise RuntimeError("Missing required environment variables")
 
-AGENT_PIN = os.environ.get("AGENT_PIN", "4321")
+twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
-# ======================
-# SECRETS (ENV VARS ONLY)
-# ======================
-TWILIO_ACCOUNT_SID = os.environ["TWILIO_ACCOUNT_SID"]
-TWILIO_AUTH_TOKEN = os.environ["TWILIO_AUTH_TOKEN"]
-ROCKETCHAT_WEBHOOK_URL = os.environ["ROCKETCHAT_WEBHOOK_URL"]
-
-PUBLIC_BASE_URL = os.environ.get(
-    "PUBLIC_BASE_URL",
-    "https://twilio-call-server-completed-with.onrender.com"
-)
-
-# ======================
-# VOICEMAIL STORAGE (RENDER SAFE)
-# ======================
-VOICEMAIL_DIR = os.path.join(app.root_path, "static", "voicemails")
+# ----------------------------
+# Storage (Render-safe path)
+# ----------------------------
+VOICEMAIL_DIR = "/tmp/voicemails"
 os.makedirs(VOICEMAIL_DIR, exist_ok=True)
 
-# ======================
-# HELPERS
-# ======================
-def is_business_hours():
-    pacific = ZoneInfo("America/Los_Angeles")
-    now = datetime.now(pacific)
-    return now.weekday() < 5 and 8 <= now.hour < 17
-
-def is_valid_phone(number):
-    digits = re.sub(r"[^\d]", "", number or "")
-    return len(digits) in (10, 11)
-
-def spell_out_digits(number):
-    digits = re.sub(r"[^\d]", "", number)
-    return ", ".join(digits)
-
-# ======================
-# INCOMING CALL
-# ======================
+# ----------------------------
+# Twilio: Incoming Call
+# ----------------------------
 @app.route("/voice", methods=["POST"])
 def voice():
     r = VoiceResponse()
-    r.say(
-        "This call may be recorded for quality and training purposes. "
-        "If this is a medical emergency, please hang up and dial 9 1 1.",
-        voice="alice"
-    )
-    r.redirect("/patient-entry")
-    return Response(str(r), mimetype="text/xml")
-
-# ======================
-# MAIN MENU
-# ======================
-@app.route("/patient-entry", methods=["POST"])
-def patient_entry():
-    r = VoiceResponse()
-
-    if not is_business_hours():
-        r.redirect("/voicemail")
-        return Response(str(r), mimetype="text/xml")
-
-    g = r.gather(num_digits=1, action="/handle-menu", timeout=5)
-    g.say(
-        "Press 1 if you are an existing patient or provider. "
-        "Press 2 if you are a prospective patient. "
-        "Press 3 if you are staff.",
-        voice="alice"
-    )
-
-    r.redirect("/voicemail")
-    return Response(str(r), mimetype="text/xml")
-
-@app.route("/handle-menu", methods=["POST"])
-def handle_menu():
-    r = VoiceResponse()
-    choice = request.form.get("Digits")
-
-    if choice == "1":
-        d = Dial(
-            callerId=TWILIO_NUMBER,
-            record="record-from-answer",
-            recordingStatusCallback="/call-recording-ready",
-            recordingStatusCallbackMethod="POST"
-        )
-        for n in TEAM_NUMBERS:
-            d.number(n)
-        r.append(d)
-
-    elif choice == "2":
-        r.redirect("/voicemail")
-
-    elif choice == "3":
-        g = r.gather(num_digits=4, action="/verify-pin")
-        g.say("Please enter your four digit staff pin.", voice="alice")
-
-    else:
-        r.say("Invalid selection.", voice="alice")
-        r.redirect("/patient-entry")
-
-    return Response(str(r), mimetype="text/xml")
-
-# ======================
-# STAFF PIN
-# ======================
-@app.route("/verify-pin", methods=["POST"])
-def verify_pin():
-    r = VoiceResponse()
-    if request.form.get("Digits") == AGENT_PIN:
-        r.redirect("/agent-ivr")
-    else:
-        r.say("Invalid pin. Goodbye.", voice="alice")
-        r.hangup()
-    return Response(str(r), mimetype="text/xml")
-
-# ======================
-# STAFF OUTBOUND
-# ======================
-@app.route("/agent-ivr", methods=["POST"])
-def agent_ivr():
-    r = VoiceResponse()
-    g = r.gather(finishOnKey="#", action="/confirm-number")
-    g.say("Enter the patient phone number, followed by pound.", voice="alice")
-    return Response(str(r), mimetype="text/xml")
-
-@app.route("/confirm-number", methods=["POST"])
-def confirm_number():
-    r = VoiceResponse()
-    number = request.form.get("Digits")
-
-    if not is_valid_phone(number):
-        r.say("Invalid number.", voice="alice")
-        r.redirect("/agent-ivr")
-        return Response(str(r), mimetype="text/xml")
-
-    spoken = spell_out_digits(number)
-    g = r.gather(num_digits=1, action=f"/dial-patient?num={number}")
-    g.say(f"You entered {spoken}. Press 1 to confirm.", voice="alice")
-    r.redirect("/agent-ivr")
-
-    return Response(str(r), mimetype="text/xml")
-
-@app.route("/dial-patient", methods=["POST"])
-def dial_patient():
-    r = VoiceResponse()
-    num = request.args.get("num")
-
-    d = Dial(
-        callerId=TWILIO_NUMBER,
-        record="record-from-answer",
-        recordingStatusCallback="/call-recording-ready",
-        recordingStatusCallbackMethod="POST"
-    )
-    d.number(num)
-    r.append(d)
-
-    return Response(str(r), mimetype="text/xml")
-
-# ======================
-# VOICEMAIL
-# ======================
-@app.route("/voicemail", methods=["POST"])
-def voicemail():
-    r = VoiceResponse()
     r.say("Please leave a message after the tone.", voice="alice")
+
     r.record(
         maxLength=180,
         playBeep=True,
+
+        # ✅ REQUIRED
+        recordingStatusCallback="/voicemail-recording-ready",
+        recordingStatusCallbackMethod="POST",
+
+        # optional
         transcribe=True,
-        transcribeCallback="/voicemail-transcription",
+        transcribeCallback="/voicemail-transcription"
     )
+
     return Response(str(r), mimetype="text/xml")
 
-# ======================
-# TRANSCRIPTION CALLBACK (CRITICAL)
-# ======================
-@app.route("/voicemail-transcription", methods=["POST"])
-def voicemail_transcription():
-    recording_url = request.form.get("RecordingUrl")
-    transcription = request.form.get("TranscriptionText", "No transcription available")
 
-    filename = f"vm_{int(datetime.utcnow().timestamp())}.mp3"
+# ----------------------------
+# Twilio: Recording Finished
+# ----------------------------
+@app.route("/voicemail-recording-ready", methods=["POST"])
+def voicemail_recording_ready():
+    recording_sid = request.form.get("RecordingSid")
+    recording_url = request.form.get("RecordingUrl")
+    call_sid = request.form.get("CallSid")
+
+    if not recording_sid or not recording_url:
+        abort(400)
+
+    # Twilio recordings need auth + .mp3
+    audio_url = f"{recording_url}.mp3"
+    filename = f"{recording_sid}.mp3"
     filepath = os.path.join(VOICEMAIL_DIR, filename)
 
+    # Download recording
     audio = requests.get(
-        recording_url + ".mp3",
-        auth=HTTPBasicAuth(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        audio_url,
+        auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+        timeout=15
     )
-    audio.raise_for_status()
+
+    if audio.status_code != 200:
+        abort(500)
 
     with open(filepath, "wb") as f:
         f.write(audio.content)
 
-    public_url = f"{PUBLIC_BASE_URL}/voicemails/{filename}"
+    public_link = f"{BASE_URL}/voicemail/{filename}"
 
-    requests.post(
-        ROCKETCHAT_WEBHOOK_URL,
-        json={
-            "text": (
-                "📞 **New Voicemail**\n\n"
-                f"📝 {transcription}\n\n"
-                f"🔊 {public_url}"
-            )
-        },
-        timeout=5
-    )
+    # Send to Rocket.Chat
+    payload = {
+        "text": (
+            "📞 **New Voicemail Received**\n\n"
+            f"• Call SID: `{call_sid}`\n"
+            f"• Recording: {public_link}"
+        )
+    }
+
+    rc = requests.post(ROCKETCHAT_WEBHOOK_URL, json=payload, timeout=10)
+
+    if rc.status_code not in (200, 204):
+        abort(500)
 
     return ("", 204)
 
-# ======================
-# SERVE VOICEMAIL FILES
-# ======================
-@app.route("/voicemails/<path:filename>")
+
+# ----------------------------
+# Serve Voicemail Audio
+# ----------------------------
+@app.route("/voicemail/<filename>")
 def serve_voicemail(filename):
-    return send_from_directory(VOICEMAIL_DIR, filename)
+    path = os.path.join(VOICEMAIL_DIR, filename)
 
-# ======================
-# SMS
-# ======================
-@app.route("/sms", methods=["POST"])
-def sms():
-    r = MessagingResponse()
-    r.message("Thanks for contacting Align Medicine.")
-    return Response(str(r), mimetype="text/xml")
+    if not os.path.exists(path):
+        abort(404)
 
-# ======================
-# START
-# ======================
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 3000)))
+    with open(path, "rb") as f:
+        return Response(f.read(), mimetype="audio/mpeg")
+
+
+# ----------------------------
+# Optional: Transcription Callback
+# ----------------------------
+@app.route("/voicemail-transcription", methods=["POST"])
+def voicemail_transcription():
+    transcription = request.form.get("TranscriptionText", "")
+    if transcription:
+        requests.post(
+            ROCKETCHAT_WEBHOOK_URL,
+            json={"text": f"📝 **Voicemail Transcription**:\n{transcription}"}
+        )
+    return ("", 204)
+
+
+# ----------------------------
+# Health Check
+# ----------------------------
+@app.route("/")
+def index():
+    return "Twilio voicemail server running"
+
