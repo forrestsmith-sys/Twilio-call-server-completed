@@ -63,7 +63,7 @@ def voice():
     r = VoiceResponse()
     r.say(
         "This call may be recorded for quality and training purposes. "
-        "If this is a medical emergency, please hang up and dial 9 1 1.",
+        "If this is a medical emergency, please hang up and dial 9 1 1. Thank you for callin Doctor Daliva's office",
         voice="alice"
     )
     r.redirect("/menu")
@@ -180,7 +180,7 @@ def dial_patient():
 @app.route("/voicemail", methods=["POST"])
 def voicemail():
     r = VoiceResponse()
-    r.say("Please leave a message after the tone.", voice="alice")
+    r.say("Please leave a detailed message with your name and phone number and we will call you back as soon as we are able .", voice="alice")
     r.record(
         maxLength=180,
         playBeep=True,
