@@ -18,6 +18,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ======================
+# VOICE SETTINGS
+# ======================
+VOICE_NAME = "Polly.Joanna-Neural"
+VOICE_LANG = "en-US"
+
+# ======================
 # CONFIG
 # ======================
 TWILIO_NUMBER = os.environ.get("TWILIO_NUMBER", "+19099705700")
@@ -71,7 +77,8 @@ def voice():
         "This call may be recorded for care coordination purposes. "
         "If this is a medical emergency, please hang up and dial 9 1 1. "
         "Thank you for calling Doctor Daliva's office.",
-        voice="alice"
+        voice=VOICE_NAME,
+        language=VOICE_LANG,
     )
     r.redirect("/menu")
     return Response(str(r), mimetype="text/xml")
@@ -92,7 +99,8 @@ def menu():
         "Press 1 if you are an existing patient or provider. "
         "Press 2 if you are a prospective patient. "
         "Press 3 if you are staff.",
-        voice="alice"
+        voice=VOICE_NAME,
+        language=VOICE_LANG,
     )
 
     r.redirect("/voicemail")
@@ -122,10 +130,14 @@ def handle_menu():
 
     elif choice == "3":
         g = r.gather(num_digits=4, action="/verify-pin", timeout=5)
-        g.say("Please enter your four digit staff pin.", voice="alice")
+        g.say(
+            "Please enter your four digit staff pin.",
+            voice=VOICE_NAME,
+            language=VOICE_LANG,
+        )
 
     else:
-        r.say("Invalid selection.", voice="alice")
+        r.say("Invalid selection.", voice=VOICE_NAME, language=VOICE_LANG)
         r.redirect("/menu")
 
     return Response(str(r), mimetype="text/xml")
@@ -157,7 +169,7 @@ def verify_pin():
     if digits == AGENT_PIN:
         r.redirect("/agent-ivr")
     else:
-        r.say("Invalid pin. Goodbye.", voice="alice")
+        r.say("Invalid pin. Goodbye.", voice=VOICE_NAME, language=VOICE_LANG)
         r.hangup()
     return Response(str(r), mimetype="text/xml")
 
@@ -168,7 +180,11 @@ def verify_pin():
 def agent_ivr():
     r = VoiceResponse()
     g = r.gather(finishOnKey="#", action="/confirm-number", timeout=10)
-    g.say("Enter the patient phone number, followed by pound.", voice="alice")
+    g.say(
+        "Enter the patient phone number, followed by pound.",
+        voice=VOICE_NAME,
+        language=VOICE_LANG,
+    )
     return Response(str(r), mimetype="text/xml")
 
 @app.route("/confirm-number", methods=["POST"])
@@ -178,13 +194,17 @@ def confirm_number():
     logger.info("Confirm number digits: %s", number)
 
     if not is_valid_phone(number):
-        r.say("Invalid number.", voice="alice")
+        r.say("Invalid number.", voice=VOICE_NAME, language=VOICE_LANG)
         r.redirect("/agent-ivr")
         return Response(str(r), mimetype="text/xml")
 
     spoken = spell_out_digits(number)
     g = r.gather(num_digits=1, action=f"/dial-patient?num={number}", timeout=5)
-    g.say(f"You entered {spoken}. Press 1 to confirm.", voice="alice")
+    g.say(
+        f"You entered {spoken}. Press 1 to confirm.",
+        voice=VOICE_NAME,
+        language=VOICE_LANG,
+    )
     r.redirect("/agent-ivr")
     return Response(str(r), mimetype="text/xml")
 
@@ -220,7 +240,8 @@ def voicemail():
     r.say(
         "Please leave a detailed message with your name and phone number. "
         "We will return your call as soon as possible.",
-        voice="alice"
+        voice=VOICE_NAME,
+        language=VOICE_LANG,
     )
     r.record(
         maxLength=180,
@@ -228,7 +249,7 @@ def voicemail():
         recordingStatusCallback=callback_url,
         recordingStatusCallbackMethod="POST"
     )
-    r.say("Thank you. Goodbye.", voice="alice")
+    r.say("Thank you. Goodbye.", voice=VOICE_NAME, language=VOICE_LANG)
     r.hangup()
     return Response(str(r), mimetype="text/xml")
 
