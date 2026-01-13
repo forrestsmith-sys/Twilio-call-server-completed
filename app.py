@@ -76,7 +76,7 @@ def voice():
     r.say(
         "This call may be recorded for care coordination purposes. "
         "If this is a medical emergency, please hang up and dial 9 1 1. "
-        "Thank you for calling Doctor Duhliva's office.",
+        "Thank you for calling Doctor Duhleava's office.",
         voice=VOICE_NAME,
         language=VOICE_LANG,
     )
