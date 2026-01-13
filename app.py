@@ -87,7 +87,6 @@ def menu():
         r.redirect("/voicemail")
         return Response(str(r), mimetype="text/xml")
 
-    # Small explicit timeout so behavior is predictable
     g = r.gather(num_digits=1, action="/handle-menu", timeout=5)
     g.say(
         "Press 1 if you are an existing patient or provider. "
@@ -96,7 +95,6 @@ def menu():
         voice="alice"
     )
 
-    # If no input, go to voicemail
     r.redirect("/voicemail")
     return Response(str(r), mimetype="text/xml")
 
@@ -187,8 +185,6 @@ def confirm_number():
     spoken = spell_out_digits(number)
     g = r.gather(num_digits=1, action=f"/dial-patient?num={number}", timeout=5)
     g.say(f"You entered {spoken}. Press 1 to confirm.", voice="alice")
-
-    # If they don't confirm, go back to agent ivr
     r.redirect("/agent-ivr")
     return Response(str(r), mimetype="text/xml")
 
@@ -216,6 +212,11 @@ def dial_patient():
 @app.route("/voicemail", methods=["POST"])
 def voicemail():
     r = VoiceResponse()
+    caller_number = request.form.get("From", "Unknown")
+
+    # Pass the caller number through the recordingStatusCallback URL
+    callback_url = f"/voicemail-complete?from={caller_number}"
+
     r.say(
         "Please leave a detailed message with your name and phone number. "
         "We will return your call as soon as possible.",
@@ -224,10 +225,9 @@ def voicemail():
     r.record(
         maxLength=180,
         playBeep=True,
-        recordingStatusCallback="/voicemail-complete",
+        recordingStatusCallback=callback_url,
         recordingStatusCallbackMethod="POST"
     )
-    # Short closing message (optional, but user-friendly)
     r.say("Thank you. Goodbye.", voice="alice")
     r.hangup()
     return Response(str(r), mimetype="text/xml")
@@ -235,7 +235,9 @@ def voicemail():
 @app.route("/voicemail-complete", methods=["POST"])
 def voicemail_complete():
     recording_url = request.form.get("RecordingUrl")
-    caller_number = request.form.get("From", "Unknown")
+
+    # Prefer number passed in query param; fall back to form
+    caller_number = request.args.get("from") or request.form.get("From", "Unknown")
     recording_duration = request.form.get("RecordingDuration")
 
     logger.info(
@@ -306,7 +308,6 @@ def voicemail_complete():
 # ======================
 @app.route("/call-recording-complete", methods=["POST"])
 def call_recording_complete():
-    # If you ever need it, you can log recording info here
     logger.info("Call recording callback: %s", dict(request.form))
     return ("", 204)
 
