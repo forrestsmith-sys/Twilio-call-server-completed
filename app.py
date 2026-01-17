@@ -58,6 +58,7 @@ os.makedirs(VOICEMAIL_DIR, exist_ok=True)
 def is_business_hours():
     pacific = ZoneInfo("America/Los_Angeles")
     now = datetime.now(pacific)
+    # Mon-Fri, 8:00 AM to 4:59 PM
     return now.weekday() < 5 and 8 <= now.hour < 17
 
 def is_valid_phone(number):
@@ -90,10 +91,9 @@ def voice():
 def menu():
     r = VoiceResponse()
 
-    if not is_business_hours():
-        r.redirect("/voicemail")
-        return Response(str(r), mimetype="text/xml")
-
+    # FIX: Removed the global business hours check here. 
+    # This allows agents to access the menu after hours.
+    
     g = r.gather(num_digits=1, action="/handle-menu", timeout=5)
     g.say(
         "Press 1 if you are an existing patient or provider. "
@@ -112,6 +112,11 @@ def handle_menu():
     choice = request.form.get("Digits")
     logger.info("Handle menu choice: %s", choice)
 
+    # FIX: Apply business hours check ONLY to patient options (1 and 2)
+    if choice in ["1", "2"] and not is_business_hours():
+        r.redirect("/voicemail")
+        return Response(str(r), mimetype="text/xml")
+
     if choice == "1":
         d = Dial(
             callerId=TWILIO_NUMBER,
@@ -129,6 +134,7 @@ def handle_menu():
         r.redirect("/voicemail")
 
     elif choice == "3":
+        # Staff portal remains accessible regardless of time
         g = r.gather(num_digits=4, action="/verify-pin", timeout=5)
         g.say(
             "Please enter your four digit staff pin.",
@@ -234,7 +240,6 @@ def voicemail():
     r = VoiceResponse()
     caller_number = request.form.get("From", "Unknown")
 
-    # Pass the caller number through the recordingStatusCallback URL
     callback_url = f"/voicemail-complete?from={caller_number}"
 
     r.say(
@@ -256,8 +261,6 @@ def voicemail():
 @app.route("/voicemail-complete", methods=["POST"])
 def voicemail_complete():
     recording_url = request.form.get("RecordingUrl")
-
-    # Prefer number passed in query param; fall back to form
     caller_number = request.args.get("from") or request.form.get("From", "Unknown")
     recording_duration = request.form.get("RecordingDuration")
 
@@ -267,7 +270,6 @@ def voicemail_complete():
     )
 
     if not recording_url:
-        logger.warning("Voicemail callback missing RecordingUrl")
         return ("", 204)
 
     filename = f"vm_{int(datetime.utcnow().timestamp())}.mp3"
@@ -279,73 +281,40 @@ def voicemail_complete():
             auth=HTTPBasicAuth(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
             timeout=30
         )
-    except Exception as e:
-        logger.exception("Error downloading voicemail audio: %s", e)
-        return ("", 204)
-
-    if audio.status_code != 200:
-        logger.error(
-            "Failed to download voicemail audio. Status: %s Body: %s",
-            audio.status_code,
-            audio.text[:500]
-        )
-        return ("", 204)
-
-    try:
-        with open(filepath, "wb") as f:
-            f.write(audio.content)
-    except Exception as e:
-        logger.exception("Error saving voicemail file: %s", e)
-        return ("", 204)
-
-    public_url = f"{PUBLIC_BASE_URL}/voicemails/{filename}"
-    logger.info("Voicemail saved: %s (public: %s)", filepath, public_url)
-
-    try:
-        resp = requests.post(
-            ROCKETCHAT_WEBHOOK_URL,
-            json={
-                "text": (
-                    f"📞 **New Voicemail**\n"
-                    f"From: {caller_number}\n\n"
-                    f"🔊 Listen: {public_url}"
-                )
-            },
-            timeout=30
-        )
-        if resp.status_code >= 400:
-            logger.error(
-                "Rocket.Chat webhook failed: %s %s",
-                resp.status_code,
-                resp.text[:500]
+        if audio.status_code == 200:
+            with open(filepath, "wb") as f:
+                f.write(audio.content)
+            
+            public_url = f"{PUBLIC_BASE_URL}/voicemails/{filename}"
+            requests.post(
+                ROCKETCHAT_WEBHOOK_URL,
+                json={
+                    "text": (
+                        f"📞 **New Voicemail**\n"
+                        f"From: {caller_number}\n\n"
+                        f"🔊 Listen: {public_url}"
+                    )
+                },
+                timeout=30
             )
     except Exception as e:
-        logger.exception("Error posting to Rocket.Chat: %s", e)
+        logger.exception("Error processing voicemail: %s", e)
 
     return ("", 204)
 
-# ======================
-# RECORDING CALLBACK
-# ======================
 @app.route("/call-recording-complete", methods=["POST"])
 def call_recording_complete():
-    logger.info("Call recording callback: %s", dict(request.form))
     return ("", 204)
 
-# ======================
-# SERVE VOICEMAILS
-# ======================
 @app.route("/voicemails/<filename>")
 def serve_voicemail(filename):
     return send_from_directory(VOICEMAIL_DIR, filename)
 
-# ======================
-# SMS
-# ======================
 @app.route("/sms", methods=["POST"])
 def sms():
     r = MessagingResponse()
     r.message("Thanks for contacting Align Medicine.")
     return Response(str(r), mimetype="text/xml")
 
-
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
