@@ -145,17 +145,19 @@ def handle_menu():
         return Response(str(r), mimetype="text/xml")
 
     if choice == "1":
-        # Inbound call connecting to team
+        # FIXED: Increased timeout from 20 to 45 seconds to give team adequate time to answer
         d = Dial(
             callerId=TWILIO_NUMBER,
             record="record-from-answer",
             recordingStatusCallback="/call-recording-complete",
             action="/dial-complete?agent=false",
-            timeout=20
+            timeout=45
         )
         for n in TEAM_NUMBERS:
             d.number(n)
         r.append(d)
+        # FIXED: Added explicit fallback redirect to voicemail
+        r.redirect("/voicemail")
     elif choice == "2":
         r.redirect("/voicemail")
     elif choice == "3":
@@ -174,8 +176,8 @@ def dial_complete():
     dial_status = request.form.get("DialCallStatus")
     is_agent = request.args.get("agent") == "true"
     
-    # If the call wasn't answered
-    if dial_status in ("no-answer", "busy", "failed", "no-answer"):
+    # FIXED: Removed duplicate "no-answer" from status check
+    if dial_status in ("no-answer", "busy", "failed"):
         r = VoiceResponse()
         if is_agent:
             # FIX: Stop staff from being sent to their own RocketChat voicemail
@@ -225,13 +227,13 @@ def confirm_number():
 def dial_patient():
     r = VoiceResponse()
     num = request.args.get("num")
-    # Added agent=true flag to ensure they don't loop into voicemail
+    # FIXED: Increased timeout from 25 to 35 seconds for outbound patient calls
     d = Dial(
         callerId=TWILIO_NUMBER,
         record="record-from-answer",
         recordingStatusCallback="/call-recording-complete",
         action="/dial-complete?agent=true", 
-        timeout=25
+        timeout=35
     )
     d.number(num)
     r.append(d)
